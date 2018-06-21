@@ -1,0 +1,410 @@
+@startuml Router内部关系.svg
+hide empty members
+hide empty fields
+hide empty methods
+'-------------------------------------------------------------------------------
+package 网络基接口 <<Frame>> {
+
+interface NetDriver << 网络接口 >> {
+    + NetSender listen();
+    + NetSender connect();
+}
+
+interface NetSender << 发送接口 >>{
+    + send();
+}
+
+abstract class NetReceiver << 接收回调 >> {
+    + recv()=0;
+    + {abstract} onConnReady();
+    + {abstract} onSendReady();
+    + {abstract} onConnClose();
+}
+
+}
+'-------------------------------------------------------------------------------
+package Router接口 <<Frame>> {
+
+RouterNode -up-|> NetDriver
+interface RouterNode <<集群接口>> {
+    + {static} create();
+    + bool start();
+}
+
+RouterClient -up-|> NetDriver
+interface RouterClient <<终端接口>> {
+    + {static} create();
+    + bool start();
+    + bool startCompleted(); 
+    + Stream saveConfigs();
+    + void setLocation();
+    + void setDomainId(); 
+    + void setBackground(); 
+    + void refresh(); 
+    + String getStatistics(); 
+    + void getPortStates();
+    + void getPathQualitys();
+}
+
+RouterAgent -up-|> NetDriver
+interface RouterAgent <<服务接口>> {
+    + {static} create();
+    + bool start();
+}
+
+}
+'-------------------------------------------------------------------------------
+NetArcConnI -up-|> NetSender
+NetArcConnI o-- NetArcListenI
+class NetArcConnI {
+    - NetReceiver _receiver;
+    + NetArcListenI _listen;
+    + send(){_listen._driver.onSendTo()}
+    + recvData(){_receiver.recv()}
+}
+note top of NetArcConnI
+- AgentItemI::onPathRecvPkt
+- RouterClientI::onPortRecvData
+- RouterNodeI::onPortRecvData
+end note
+
+'RouterPathI --|> TimerListener
+'RouterPathI --|> NetReceiver
+'RouterPathI --|> NetSender
+RouterPathI o-- PathReceiver
+RouterPathI o-up- P2pClient
+RouterPathI *-up- Connection
+class RouterPathI #red-green{
+    - NetSender _netSender;
+    + setNetSender(NetSender);
+    + setPathReceiver(PathReceiver);
+    + pathSendPkt(){__sendOnePkt()}
+    - __sendOnePkt(){_netSender.send()}
+}
+'-------------------------------------------------------------------------------
+RouterItemI -right-|> PathReceiver
+'RouterItemI --|> TimerListener
+RouterItemI *-- ClientPathI
+RouterItemI *-- RouterClientAgent
+class RouterItemI{
+    - RouterClientAgent _mainRouterAgent;
+    - ClientPathI _clientPaths[3];
+    + sendData(){_clientPaths._routerPath.pathSendPkt()}
+}
+RemotePath o-- RouterItemI
+class RemotePath {
+     + RemoteItemI _remoteItem; 
+     + RouterItemI _pathItem; 
+}
+
+RemoteCost o-- RemotePath
+class RemoteCost {
+    + RemotePath _path;
+    + int _cost;
+}
+RemoteItemI *-right- RemoteCost
+RemoteItemI *-- RemotePath
+RemoteItemI *-- RemoteP2pI
+class RemoteItemI {
+    - map<RemotePath> _remotePaths
+    - set<RemoteCost> _pathArrays;
+    - RouterItemI __getSendPath();
+    - RemoteP2pI _remoteP2p
+    + sendData(){__getSendPath()/_remoteP2p.sendData()}
+}
+
+ClientPathI *-- RouterPathI
+ClientPathI --|> ConnectionListener
+class ClientPathI {
+    + RouterClientAgent _routerAgent; 
+    + RouterPathI _routerPath; 
+    + connect(){new RouterPathI}
+}
+
+RouterClientI -up-|> RouterClient
+RouterClientI -up-|> PortReceiver
+RouterClientI --|> NetArcDriverI
+RouterClientI -up-|> AgentListener
+RouterClientI *-- RemoteItemI
+RouterClientI *-- RouterItemI
+'RouterClientI *-- ListenPort
+class RouterClientI {
+    - map<ListenPort> _listenPorts;
+    - map<RouterItemI> _routerItems;
+    - map<RemoteItemI> _remoteItems; 
+    + onSendTo(){_remoteItems.sendData()}
+    + onClientLoadResult(routers);
+    + onGetConnection(){new RouterPathI}
+}
+'-------------------------------------------------------------------------------
+AgentItemI --|> PathReceiver
+AgentItemI *-- RouterPathI
+AgentItemI *-- RouterAgentAgent
+class AgentItemI {
+    - RouterAgentAgent _routerAgent;
+    - RouterPathI _routerPath;
+    + onSendTo(){_routerPath.pathSendPkt()}
+}
+
+RouterAgentI --|> NetArcDriverI
+RouterAgentI -up-|> RouterAgent
+RouterAgentI *-- AgentItemI
+class RouterAgentI {
+    - map<AgentItemI> _agentItems;
+    + onSendTo(){_agentItems.onSendTo()}
+}
+'-------------------------------------------------------------------------------
+DirectNodeI --|> PathReceiver
+DirectNodeI o-- RouterPathI
+class DirectNodeI {
+    - RouterPathI _routerPath;
+    - sendPacket(){_routerPath.pathSendPkt()}
+    - DirectNodeI getSendPath();
+    + sendData(){getSendPath().sendPacket()}
+}
+ClientPath o-left- DirectNodeI
+class ClientPath {
+    + DirectNodeI _toNode;
+}
+ClientCost o-- ClientPath
+class ClientCost {
+    + ClientPath _path;
+    + _cost
+}
+RemoteClientI *-down- ClientPath
+RemoteClientI *-left- ClientCost
+class RemoteClientI {
+    - map<ClientPath> _clientPaths;
+    - set<ClientCost> _pathArrays[4];
+    - DirectNodeI __getSendPath();
+    + sendData(){__getSendPath().sendData()}
+}
+
+DirectClientI --|> PathReceiver
+class DirectClientI {
+}
+
+RouterNodeI --|> NetArcDriverI
+RouterNodeI -up-|> PortReceiver
+RouterNodeI -up-|> AdapterListener
+RouterNodeI -up-|> RouterNode
+RouterNodeI *-- RemoteClientI
+RouterNodeI *-- DirectClientI
+RouterNodeI *-- DirectNodeI
+RouterNodeI *-- DirectAgentI
+'RouterNodeI *-- ListenPort
+RouterNodeI o-right- NodeListener
+class RouterNodeI {
+    - map<ListenPort> _listenPorts;
+    - map<RemoteClientI> _remoteClients;
+    - map<DirectClientI> _directClients;
+    - map<DirectNodeI> _directNodes;
+    - map<DirectAgentI> _directAgents;
+    + onSendTo(){_remoteClients/_directNodes.sendData()}
+}
+RouterNodeI *-up- AgentServerI : Agent
+RouterNodeI *-up- ClientServerI : Router
+RouterNode ()-- RouterNodeI : Node
+RouterClient ()-- ClientServerI
+RouterAgent ()-- AgentServerI
+'-------------------------------------------------------------------------------
+interface PathReceiver {
+    + onPathActive();
+    + onPathCostChanged();
+    + onPathCheckClose();
+    + onPathClosed();
+    + onPathRecvPkt();
+}
+
+interface PortReceiver {
+    + onPortRecvData();
+}
+
+interface AgentListener {
+    + Connection onGetConnection(agent,endpoint);
+}
+
+interface AdapterListener {
+    + Connection onRecvConnection(sender,receiver);
+}
+
+interface ConnectionListener {
+    + onConnReady(connection);
+    + onConnClose(connection);
+    + onConnReset(connection);
+}
+
+abstract class NetArcDriverI {
+    + NetDriverPtr _driver;
+    + onSendTo()=0;
+    + onStartListen()=0;
+}
+
+'NetArcListenI --|>NetArcListenResult
+NetArcListenI o-- NetArcDriverI
+class NetArcListenI {
+    - NetArcDriverI _driver;
+}
+
+class Connection;
+
+'P2pClient --|> NetSender
+interface P2pClient {
+    + {static} create();
+    + stop();
+    + restart();
+    + String statistics();
+}
+
+P2pClientI --|> P2pClient
+class P2pClientI {
+}
+
+RemoteP2pI --|> PathReceiver
+RemoteP2pI *-- RouterPathI
+RemoteP2pI *-- P2pClient
+class RemoteP2pI {
+    - RouterPathI _routerPath;
+    - P2pClient _p2pClient;
+    + sendData(){_routerPath.pathSendPkt()}
+}
+
+DirectAgentI --|> PathReceiver
+DirectAgentI -up-|> PortReceiver
+class DirectAgentI {
+}
+
+ListenPort o-- PortReceiver
+class ListenPort {
+    + PortReceiver _portReceiver
+}
+note bottom of ListenPort
+RouterClientI::_listenPorts
+RouterNodeI::_listenPorts
+- RouterItemI::onPathRecvPkt
+- RemoteItemI::onP2pRecvPkt
+- DirectAgentI::onPathRecvPkt
+- DirectClientI::onPathRecvPkt
+- DirectNodeI::onPathRecvPkt
+end note
+'-------------------------------------------------------------------------------
+interface NodeListener {
+    + onConfigsReady();
+    + onResolveHosts();
+    + onSortDists();
+}
+interface RouterClientAgent
+interface RouterAgentAgent
+RouterClientAgent --() RouterClient
+RouterAgentAgent --() RouterAgent
+@enduml
+@startuml Router高层控制.svg
+hide empty members
+hide empty fields
+hide empty methods
+'-------------------------------------------------------------------------------
+interface RouterClient {
+    + clientLoad();
+    + clientResolveHosts();
+    + clientGetEndpoints();
+
+    + clientConnect1();
+    + clientConnect2();
+    + clientReport();
+
+    + clientPortStates();
+    + clientPathQualitys();
+}
+
+interface RouterAgent {
+    + agentResolveHosts();
+    + agentUpdate();
+    + agentListenStart();
+    + agentListenStop();
+}
+
+interface RouterNode {
+    + nodeUpdate1();
+    + nodeUpdate2();
+    + nodeGetNodes();
+    + nodeGetEndpoints();
+    + nodeConnect();
+    + nodePortStates();
+    + nodePathQualitys();
+}
+class RouterNode {
+}
+@enduml
+
+@startuml agentListenStart流程.svg
+(*)-->NetDriver.listen
+-right->RouterAgentI.listen
+if "arc/varc" then
+-left->[false]_driver.listen
+-->(*)
+else
+-right->[true] NetArcDriverI.listen
+-->new NetArcListenI
+-->NetArcDriverI.onStartListen
+-left-> RouterAgentI.onStartListen
+--> new onStartListen_async
+-right-> AgentItemI.onStartListen
+-right-> RouterAgentAgent.agentListenStart_begin
+--> agentListenStart_async.cmdResult
+--> NetArcListenI.onListenResult
+--> NetArcDriverI.addConnReadyReceiver
+-left->NetArcListenI.listen
+-->NetArcDriverI.addConnReadyReceiver
+-left->(*)
+endif
+@enduml
+
+@startuml clientConnect流程.svg
+(*)-->RemoteItemI.sendData
+-->RemoteItemI.__tryConnect
+-->RouterClientI.getRouterItems
+-->RemoteItemI.__addRouterItem
+if _routerId != _remoteRouterId then
+-->[true]RouterItemI.connectRemote
+-->(*)
+else
+-->[false]RouterItemI.connectLocal
+endif
+-->(*)
+@enduml
+@startuml clientLoad流程.svg
+autonumber
+'角色定义
+participant "终端\nRouterClientI" as c
+participant "clientLoad_async" as a
+participant "RouterNodeI" as r
+participant "NodeListener" as n
+participant "资源\nResourceServer" as s
+
+note over r: start()
+r<-s:S=createAgent("ResourceServer")
+note over r: onUpdateConfigs()
+r->s:S.updateLoadResourcePrefix()
+
+note over c: onSchd()
+c->a: new()
+note over a: __start()
+a<-r:R=createAgent(rand())
+a--\r:R.clientLoad_begin()
+r->n: onSortDists()
+a\--r: R.clientLoad_end()
+
+note over r: onDeactivate()
+r->s:S.updateResource(-1)
+@enduml
+
+@startuml RouterClient发送流程.svg
+(*) --> "RemoteItemI::sendData()"
+--> "__tryConnect()"
+if "_isLocalClient" then
+  if "_remoteP2p" then
+  endif
+else
+endif
+--> (*)
+@enduml

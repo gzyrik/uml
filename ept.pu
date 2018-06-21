@@ -1,0 +1,121 @@
+@startuml ept内部关系.svg
+hide empty members
+hide empty fields
+hide empty methods
+'-------------------------------------------------------------------------------
+package Common <<Frame>> {
+
+interface ResourceServer{
+    + loadResource();
+    + updateResources();
+}
+
+}
+'-------------------------------------------------------------------------------
+package Resource <<Frame>> {
+
+ResourceServerI ...> ResourceServer : 查询资源
+class ResourceServerI {
+    -map<ResourceTypeI> _resourceTypes;
+    + allocEndpoint_begin()
+    + allocContent_begin()
+    + loadResource_begin()
+}
+ResourceServer ()-- ResourceServerI
+
+}
+'-------------------------------------------------------------------------------
+package Content <<Frame>> {
+
+class ContentSessionI {
+    + sendData();
+    + onRecvData();
+    + close(); 
+}
+
+ContentI "*" *-up- ContentSessionI
+ContentI "1" *-right- ContentDirectI
+class ContentI {
+    - ContentDirectI _contentDirect; 
+    - map<ContentSessionI> _sessions;
+    - __onCreateSession(endpoint){new ContentSessionI(endpoint)}
+    - __onCreateDirect(){new ContentDirectI}
+}
+class ContentDirectI {
+    - connect();
+    - reconnect();
+}
+
+ContentServerI <.down. ResourceServerI : 分配内容
+ContentServerI .right.> ResourceServer : 注册资源
+class ContentServerI {
+    + addContentType();
+    - updateResource();
+}
+
+ContentDirect ()-- ContentDirectI
+Content ()-- ContentI
+ContentServer ()-- ContentServerI
+
+}
+'-------------------------------------------------------------------------------
+package Endpoint <<Frame>> {
+
+'EndpointDirectI --() Endpoint
+'EndpointDirectI --() P2pEndpoint
+EndpointDirectI -up-|> ContentDirectI
+class EndpointDirectI {
+}
+
+'EndpointI --() P2pEndpoint
+EndpointI -up-|> ContentI
+abstract class EndpointI {
+    + sendClientData(mpath,data);
+    + sendContentData(mpath,data);
+    - __onCreateDirect(){new EndpointDirectI}
+    - onRecvClientData()=0;
+    - onRecvContentData()=0;
+    - __onClientConnectStart()=0;
+    - __onClientConnectResult()=0;
+    - __onContentConnect()=0;
+}
+
+'EndpointServerI --() EndpointServer
+EndpointServerI -up-|> ContentServerI
+abstract class EndpointServerI {
+    + allocEndpoint(endpoint,content,outParams);
+    - __onCreateEndpoint(outParams)=0;
+}
+
+}
+
+EndpointRelayI -up-|> EndpointI
+class EndpointRelayI {
+}
+EndpointRelayServerI -up-|> EndpointServerI
+class EndpointRelayServerI {
+    + EndpointRelayServerI(){addContentType("PacketRelay")}
+    - __onCreateEndpoint(){new EndpointRelayI}
+}
+
+@enduml
+
+@startuml ept连接过程.svg
+'角色定义
+participant "终端\MediaSessionI" as c
+participant "Endpoint" as e
+
+
+participant "ResourceServer" as RS
+participant "ContentServerI" as RS
+
+
+participant "EndpointRelayServerI" as ESI
+participant "EndpointServerI" as ES
+participant "EndpointRelayI" as ERI
+participant "ContentI" as CI
+
+ES -> ESI : __onCreateEndpoint
+ESI -> ERI : new EndpointRelayI
+ES -> CI : __getDirectObjectId
+@enduml

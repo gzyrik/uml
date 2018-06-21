@@ -1,0 +1,76 @@
+@startuml
+autonumber
+
+'角色定义
+participant "资源管理\nResource" as e
+participant "会话管理\nSession" as s
+participant "账户系统\nAccount" as a
+participant "外部侦听\nACD" as c
+participant "会议实例\nJSMI" as i
+participant "会议引擎\nJSMD" as d
+Actor USER1 as m1
+Actor USER2 as m2
+
+
+title 会议实例(JSMI)的内部流程图
+'流程图
+note over i: 获取资源服务
+i<-e: RES=createAgent("Resource")
+
+== 加入流程 ==
+i/--m1: JSMII.join_begin(...)
+note over e: 分配EP/CP
+i--\e: RES.allocEndpoint_begin(...)
+i\--e: RES.allocEndpoint_end(ep,cp)
+i--/m1: JSMII.join_end(ep,cp)
+
+== 邀请流程 ==
+i<-m1: JSMII.invite("USER2")
+i<-a: AC=createAgent("Account/USER2")
+i--\a: AC.getSessions_begin()
+i\--a: SE=createAgent("Session/USER2")
+i->s: SE.sendOnlineMessage("JSMInvite","invite",...)
+note over i,a: 推送
+s->m2: onMessage("JSMInvite", "invite")
+alt 拒绝邀请
+i<-m2: notify("USER1","decline",...)
+i->m1: onMessage("JSMNotify", "decline", "USER2")
+else 接收邀请
+note over m2: 加入会议
+i<-m2: join(...)
+else 检测超时 <color red>TODO</color>
+i->m1: notify("absence",...)
+end
+
+== 通知流程 ==
+i<-m1:JSMII.notify("USER2", type, ...)
+i<-a: AC=createAgent("Account/USER2")
+i--\a: AC.getSessions_begin()
+i\--a: SE=createAgent("Session/USER2")
+i->s: SE.sendOnlineMessage("JSMNotify", type, ...)
+note over i,a: 推送
+s->m2: onMessage("JSMNotify", type, ...)
+
+== 外部控制流程: ==
+c--\i: JSMII.command_begin(json)
+i->d: olive_routeTCP(json)
+i<-d: ON_RECV_TCP()
+c\--i: JSMII.command_end()
+
+== 向外通知流程<color red>TODO 将使用addListen流程</color> ==
+i->i: ACD=createAgent("ACD")
+note over i,d: 收到会议内部事件
+i<-d: JSMII::onRecvMsgData(json)
+i->c: ACD.onEvent(json,...)
+
+
+== 查询流程 <color red>TODO</color> ==
+c->i: JSMII.query_begin()
+note over i: 没有实现
+
+== 外部踢人流程 <color red>将删除,由command指令</color> ==
+note over i: <color red>有问题,可由外部控制流程实现</color>
+c->i: JSMII.kickoff_begin()
+
+
+@enduml

@@ -1,0 +1,31 @@
+@startuml
+autonumber
+
+'角色定义
+participant "测距服务\nHostDist" as hd
+participant "会议服务\nJSMS" as s
+participant "额外服务入口\nJMDE" as e
+participant "额外服务\nJMDS" as ds
+participant "额外服务实例\nConfDelivery.exe" as c
+
+
+title 会议额外服务(JMDE)的内部流程图
+'流程图
+s<-e: JMDE=createAgent("JMDE")
+note over e: 获取测距服务
+e<-hd:HD=createAgent("HostDist")
+
+
+== 创建流程JSMSManagerI::create_begin ==
+s--\e: JMDE.create_begin(...)
+note over e: 按距离排序JMDS
+e->hd:HD.distSort(...)
+note over e: 计算空闲的JMDS并创建服务实例
+e<-ds:JMDS= createAgent(jmdsId)
+e--\ds:JMDS.create_begin()
+note over ds: 启动实例进程
+ds->c: CreateProcess("ConfDelivery.exe")
+e\--ds:
+s\--e: JMDE::create_end()
+
+@enduml

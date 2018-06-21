@@ -1,0 +1,66 @@
+@startuml
+autonumber
+
+'角色定义
+box "MTC"
+    Actor USER1 as m1
+end box
+
+box "Justalk Cloud Server"
+    participant "会议入口\nJSME" as e
+    participant "会议服务\nJSMI" as i
+    participant "会议引擎\nJSMD" as d
+    participant "媒体服务\nMediaSession" as ms
+end box
+box "MTC"
+    Actor USER2 as m2
+end box
+title 基本业务流程
+
+'流程图
+note over m1: 获取入口服务
+m1 <- e: JSME=createAgent("#JSME")
+
+== 查询信息 ==
+m1 --\ e: JSME.query_begin(confNumber,...)
+m1 \-- e: JSME.query_end(confUri,...)
+
+== 加入流程 ==
+note over m1: 获取会议实例
+m1 <- i: JSMI=createAgent(confUri)
+
+group 使用EP/CP建立USER1与JSMI的ARC通信
+    m1 --\ i: JSMI.join_begin(...)
+    m1 \-- i: JSMI.join_end(ep,cp,...)
+    m1 <- ms: MS=MediaSession.create()
+    m1 --\ ms: MS.connect(ep,cp,...)
+    m1 \-- ms: MS.onConnectResult()
+end
+
+group 请求应答式信令通信
+    note right m1: 通过ARC通道传递报文
+    m1 --\ i: Jsm_Join(...)
+    i  --\ d: JSMI透传请求报文
+    i  \-- d: JSMI透传应答报文
+    m1 \-- i: JoinOk
+end
+
+== 邀请流程 ==
+note over m2: 注册消息接收器
+m2 -> m2: addMessageReceiver(receiver);
+m1 --\ i: JSMI.invite_begin(USER2)
+m2 \-- i: JSMI.SendOnlineMessage("invite",confUri)
+alt 接收邀请
+    m2 -> i: 获取confUri后,进行"加入流程"
+else 拒绝邀请 
+    m2 -> i: JSMI.notify("decline",USER1)
+    m1 <- i: JSMI.SendOnlineMessage('decline", USER2)
+end
+
+== 离会流程 ==
+m1 -> d: Jsm_Leave(...)
+alt USER2 未参会
+    m1 -> i: JSMI.notify('cancel')
+    m2 <- i: JSMI.SendOnlineMessage('cancel", USER1)
+end
+@enduml

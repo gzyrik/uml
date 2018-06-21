@@ -1,0 +1,66 @@
+@startuml
+autonumber
+
+'角色定义
+participant "测距服务\nHostDist" as hd
+
+box "会议服务"
+participant "会议入口\nJSME" as e
+participant "会议服务\nJSMS" as s
+participant "会议实例\nJSMI" as i
+participant "会议数据库\nJSMDb" as db
+end box
+
+participant "会议引擎\nJSMD" as d
+
+title 入口服务(JSME)的内部流程图
+'流程图
+note over e: 获取测距服务
+e<-hd:HD=createAgent("HostDist")
+note over e: 获取数据库服务
+e<-db:JSMDb=createAgent("#JSMDb")
+note over e: 定时同步数据库
+e->e:orderSchd()
+note over e: 定时开启预约会议
+e->e:orderJSMI()
+
+note over s: 获取入口服务
+s<-e:JSME=createAgent("#JSME")
+note over e: 定时注册并更新状态
+s->e:JSME.update()
+
+== 分配JSMI流程:JSMEI::create_begin() ==
+note over e: 按距离排序JSMS
+e->hd:HD.distSort(...)
+note over e: 计算空闲的JSMS并创建JSMI
+e->s:JSMS.create(...)
+s<-i:JSMII=new JSMII
+s->i:JSMII.startJSMDService()
+i->d:启动jsmd线程
+
+== 查询流程:JSMEI::query_begin() ==
+e<-i:JSMI=createAgent(jsmiId)
+e--\i:JSMI.query_begin()
+e\--i:JSMI.query_end(_createParams)
+
+== 预约流程:JSMEI::reserve_begin() ==
+note over db: 登记预约信息
+e->db:JSMDb.sqlInsert(...)
+
+== 取消预约流程:JSMEI::cancelReserve_begin() ==
+alt 已开始
+    e<-i:JSMI=createAgent(jsmiId))
+    e--\i:JSMI.cancelReserve_begin(...)
+    note over d: 空报文将终止引擎
+    i->d:onSendMsgData("",data)
+    e\--i:JSMI.cancelReserve_end()
+end
+
+== 终止会议流程:JSMEI::destory() ==
+note over db: 删除会议信息
+e->db:JSMDb.sqlDelete(...)
+
+== 状态通知流程:JSMEI::statusNotify_begin() ==
+note over e: 没有实现
+
+@enduml
