@@ -40,9 +40,9 @@ do
     proto_arc.fields.fromOverflow   = ProtoField.uint8 (ARC_NAME..".fromOverflow","From Overflow",base.DEC)
     proto_arc.fields.toOverflow     = ProtoField.uint8 (ARC_NAME..".toOverflow","To Overflow",base.DEC)
     proto_arc.fields.paths          = ProtoField.uint16(ARC_NAME..".paths","Path Id",base.DEC)
-    proto_arc.fields.fromClientIpaddr = ProtoField.uint32(ARC_NAME..".fromClientIpaddr","fromClientIpaddr",base.HEX)
-    proto_arc.fields.ctrlType       = ProtoField.uint8(ARC_NAME..".ctrlType","Ctrl Type", base.DEC, CtrlType)
-    proto_arc.fields.padding        = ProtoField.bytes(ARC_NAME..".padding","Padding")
+    proto_arc.fields.fromClientIp   = ProtoField.ipv4  (ARC_NAME..".fromClientIp","fromClientIp")
+    proto_arc.fields.ctrlType       = ProtoField.uint8 (ARC_NAME..".ctrlType","Ctrl Type", base.DEC, CtrlType)
+    proto_arc.fields.padding        = ProtoField.bytes (ARC_NAME..".padding","Padding")
 
     proto_addr.fields.routerId      = ProtoField.uint16(ADDR_NAME..".routerId","Router Id",base.DEC)
     proto_addr.fields.routerCost    = ProtoField.uint16(ADDR_NAME..".routerCost","Router Cost",base.DEC)
@@ -52,10 +52,10 @@ do
     proto_addr.fields.refClientId   = ProtoField.uint16(ADDR_NAME..".refClientId","refClient Id",base.DEC)
     proto_addr.fields.port          = ProtoField.uint16(ADDR_NAME..".port","port",base.DEC)
 
-    proto_mpth.fields.type          =  ProtoField.uint32(MPTH_NAME..".type","type",base.DEC, MPacketType, bit32.lshift(3, 30))
-    proto_mpth.fields.path          =  ProtoField.uint32(MPTH_NAME..".path","path",base.DEC, MPathType, bit32.lshift(3, 28))
-    proto_mpth.fields.seqno         =  ProtoField.uint32(MPTH_NAME..".seqno","seqno",base.DEC, nil, bit32.lshift(0x3FFF, 14))
-    proto_mpth.fields.timestamp     =  ProtoField.uint32(MPTH_NAME..".timestamp","timestamp",base.DEC, nil, 0x3FFF)
+    proto_mpth.fields.type          = ProtoField.uint32(MPTH_NAME..".type","type",base.DEC, MPacketType, bit32.lshift(3, 30))
+    proto_mpth.fields.path          = ProtoField.uint32(MPTH_NAME..".path","path",base.DEC, MPathType, bit32.lshift(3, 28))
+    proto_mpth.fields.seqno         = ProtoField.uint32(MPTH_NAME..".seqno","seqno",base.DEC, nil, bit32.lshift(0x3FFF, 14))
+    proto_mpth.fields.timestamp     = ProtoField.uint32(MPTH_NAME..".timestamp","timestamp",base.DEC, nil, 0x3FFF)
 
     local HEAD_SIZE = 8
     local function decodeHead(spec, tvb, root)
@@ -128,13 +128,13 @@ do
             if routerId ~= 0 then info = routerId end
             if clientId ~= 0 then info = info .. '.' .. clientId end
         else
-            info = refClientId
+            info = refRouterId
             if refClientId ~= 0 then info = info .. '.' .. refClientId end
         end
         if port ~= 0 then info = info .. ':' .. port end
         tree:append_text(' ' .. info)
 
-        return tvb(i):tvb(), info
+        return tvb(i):tvb(), info, port
     end
 
     local function decodeCtrl(tvb, root, info)
@@ -151,10 +151,10 @@ do
     local function decodePacket(spec, tvb, root, info)
         tvb = decodeInfo(spec, tvb, root)
         tvb = decodePaths(spec.pathCount, tvb, root)
-        local tvb, fromAddrInfo = decodeAddr("From Addr", spec.fromAddrType, tvb, root)
-        local tvb, toAddrInfo   = decodeAddr("To Addr", spec.toAddrType, tvb, root)
-        if  spec.fromClientIpaddr then
-            root:add(proto_arc.fields.fromClientIpaddr, tvb(0,4))
+        local tvb, fromAddrInfo, fromPort = decodeAddr("From Addr", spec.fromAddrType, tvb, root)
+        local tvb, toAddrInfo, toPort = decodeAddr("To Addr", spec.toAddrType, tvb, root)
+        if  spec.fromClientIp then
+            root:add(proto_arc.fields.fromClientIp, tvb(0,4))
             tvb = tvb(4):tvb()
         end
         if string.len(fromAddrInfo) > 0 or string.len(toAddrInfo) > 0 then
@@ -164,6 +164,16 @@ do
             table.insert(info, 'len='.. tvb:len())
         elseif spec.packetType == Packet_Ctrl then
             tvb = decodeCtrl(tvb, root, info)
+        elseif fromPort == 2 and toPort == 2 and tvb:len() >= 22 then
+            local i, len = 5, tvb(1, 4):uint()
+            local localPubHost, i, len = tvb(i, len):string(), i+len, 4
+            local localPubPort, i, len = tvb(i, len):uint(), i+len, 4
+            local i, len = i+len, tvb(i, len):uint()
+            local localPrvHost, i, len = tvb(i, len):string(), i+len, 4
+            local localPrvPort, i, len = tvb(i, len):uint(), i+len, 4
+            local remotePubPort, i = tvb(i, len):uint(), i+len
+            table.insert(info, string.format("%s:%s ~ %s:%d > %d", localPrvHost, localPrvPort, localPubHost, localPubPort, remotePubPort))
+            tvb = tvb(i):tvb()
         else
             table.insert(info, string.format("len=%d, did=%d,level=%d", tvb:len(), spec.did, spec.level))
         end
@@ -197,9 +207,9 @@ do
             spec.fromAddrType = bit32.band(bit32.rshift(b, 2), 7)
             spec.toAddrType = bit32.band(bit32.rshift(b, 5), 7)
             spec.pathCount = bit32.band(b, 3) 
-            spec.fromClientIpaddr = (bit32.band(spec.fromAddrType, Addr_ClientId) ~= 0)
+            spec.fromClientIp = (bit32.band(spec.fromAddrType, Addr_ClientId) ~= 0)
             size = size + spec.pathCount*2 + ADDR_SIZE[bit32.band(spec.fromAddrType,7)] + ADDR_SIZE[bit32.band(spec.toAddrType,7)]
-            if spec.fromClientIpaddr then size = size + 4 end
+            if spec.fromClientIp then size = size + 4 end
             if len < size then return false end
             if spec.packetType == Packet_Ctrl then
                 spec.ctrlType = tvb(size, 1):uint()
@@ -275,5 +285,5 @@ do
             return distor_dat:call(tvb, pinfo, root)
         end
     end
-    udp_encap_table:add(0, proto_arc)
+    udp_encap_table:add(8000, proto_arc)
 end

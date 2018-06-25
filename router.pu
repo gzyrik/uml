@@ -87,6 +87,7 @@ RouterItemI -right-|> PathReceiver
 RouterItemI *-- ClientPathI
 RouterItemI *-- RouterClientAgent
 class RouterItemI{
+    - int _clientId;
     - RouterClientAgent _mainRouterAgent;
     - ClientPathI _clientPaths[3];
     + sendData(){_clientPaths._routerPath.pathSendPkt()}
@@ -106,6 +107,8 @@ RemoteItemI *-right- RemoteCost
 RemoteItemI *-- RemotePath
 RemoteItemI *-- RemoteP2pI
 class RemoteItemI {
+    + const int _remoteRouterId;
+    + const int _remoteClientId;
     - map<RemotePath> _remotePaths
     - set<RemoteCost> _pathArrays;
     - RouterItemI __getSendPath();
@@ -122,9 +125,9 @@ class ClientPathI {
 }
 
 RouterClientI -up-|> RouterClient
+RouterClientI -up-|> AgentListener
 RouterClientI -up-|> PortReceiver
 RouterClientI --|> NetArcDriverI
-RouterClientI -up-|> AgentListener
 RouterClientI *-- RemoteItemI
 RouterClientI *-- RouterItemI
 'RouterClientI *-- ListenPort
@@ -240,13 +243,17 @@ abstract class NetArcDriverI {
     + onStartListen()=0;
 }
 
-'NetArcListenI --|>NetArcListenResult
+NetArcListenI -up-|>NetArcListenResult
 NetArcListenI o-- NetArcDriverI
 class NetArcListenI {
     - NetArcDriverI _driver;
 }
 
-class Connection;
+class Connection
+
+interface NetArcListenResult {
+    + onListenResult(local, portVer);
+}
 
 'P2pClient --|> NetSender
 interface P2pClient {
