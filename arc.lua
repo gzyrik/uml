@@ -40,7 +40,8 @@ do
     proto_arc.fields.fromOverflow   = ProtoField.uint8 (ARC_NAME..".fromOverflow","From Overflow",base.DEC)
     proto_arc.fields.toOverflow     = ProtoField.uint8 (ARC_NAME..".toOverflow","To Overflow",base.DEC)
     proto_arc.fields.paths          = ProtoField.uint16(ARC_NAME..".paths","Path Id",base.DEC)
-    proto_arc.fields.fromClientIp   = ProtoField.ipv4  (ARC_NAME..".fromClientIp","fromClientIp")
+    proto_arc.fields.fromClientIpv4 = ProtoField.ipv4  (ARC_NAME..".fromClientIpv4","fromClientIp")
+    proto_arc.fields.fromClientIpv6 = ProtoField.ipv6  (ARC_NAME..".fromClientIpv6","fromClientIp")
     proto_arc.fields.ctrlType       = ProtoField.uint8 (ARC_NAME..".ctrlType","Ctrl Type", base.DEC, CtrlType)
     proto_arc.fields.padding        = ProtoField.bytes (ARC_NAME..".padding","Padding")
 
@@ -73,7 +74,6 @@ do
 
     local INFO_SIZE = 8
     local function decodeInfo(spec, tvb, root)
-        spec.did, spec.level = tvb(0, 4):uint(), tvb(4, 1):uint()
         root:add(proto_arc.fields.did, tvb(0, 4))
         root:add(proto_arc.fields.level, tvb(4, 1))
         root:add(proto_arc.fields.pathCount, tvb(5, 1))
@@ -153,9 +153,14 @@ do
         tvb = decodePaths(spec.pathCount, tvb, root)
         local tvb, fromAddrInfo, fromPort = decodeAddr("From Addr", spec.fromAddrType, tvb, root)
         local tvb, toAddrInfo, toPort = decodeAddr("To Addr", spec.toAddrType, tvb, root)
-        if  spec.fromClientIp then
-            root:add(proto_arc.fields.fromClientIp, tvb(0,4))
-            tvb = tvb(4):tvb()
+        if spec.fromClientIp then
+            if bit32.band(spec.level, 4) ~= 0 then
+                root:add(proto_arc.fields.fromClientIpv6, tvb(0,16))
+                tvb = tvb(16):tvb()
+            else
+                root:add(proto_arc.fields.fromClientIpv4, tvb(0,4))
+                tvb = tvb(4):tvb()
+            end
         end
         if string.len(fromAddrInfo) > 0 or string.len(toAddrInfo) > 0 then
             table.insert(info, fromAddrInfo .. '→' .. toAddrInfo)
@@ -203,13 +208,20 @@ do
         if spec.headType < Head_Ping then
             size = HEAD_SIZE + INFO_SIZE
             if len < size then return false end
+            spec.did, spec.level = tvb(HEAD_SIZE, 4):uint(), tvb(HEAD_SIZE+4, 1):uint()
             b = tvb(HEAD_SIZE+5, 1):uint()
             spec.fromAddrType = bit32.band(bit32.rshift(b, 2), 7)
             spec.toAddrType = bit32.band(bit32.rshift(b, 5), 7)
             spec.pathCount = bit32.band(b, 3) 
             spec.fromClientIp = (bit32.band(spec.fromAddrType, Addr_ClientId) ~= 0)
             size = size + spec.pathCount*2 + ADDR_SIZE[bit32.band(spec.fromAddrType,7)] + ADDR_SIZE[bit32.band(spec.toAddrType,7)]
-            if spec.fromClientIp then size = size + 4 end
+            if spec.fromClientIp then
+                if bit32.band(spec.level, 4) ~= 0 then
+                    size = size + 16
+                else
+                    size = size + 4
+                end
+            end
             if len < size then return false end
             if spec.packetType == Packet_Ctrl then
                 spec.ctrlType = tvb(size, 1):uint()

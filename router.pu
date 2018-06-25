@@ -3,7 +3,7 @@ hide empty members
 hide empty fields
 hide empty methods
 '-------------------------------------------------------------------------------
-package 网络基接口 <<Frame>> {
+package 网络接口 <<Frame>> {
 
 interface NetDriver << 网络接口 >> {
     + NetSender listen();
@@ -55,7 +55,7 @@ interface RouterAgent <<服务接口>> {
 }
 '-------------------------------------------------------------------------------
 NetArcConnI -up-|> NetSender
-NetArcConnI o-- NetArcListenI
+NetArcConnI --* NetArcListenI
 class NetArcConnI {
     - NetReceiver _receiver;
     + NetArcListenI _listen;
@@ -72,7 +72,7 @@ end note
 'RouterPathI --|> NetReceiver
 'RouterPathI --|> NetSender
 RouterPathI o-- PathReceiver
-RouterPathI o-up- P2pClient
+RouterPathI o.up. P2pClient
 RouterPathI *-up- Connection
 class RouterPathI #red-green{
     - NetSender _netSender;
@@ -84,7 +84,7 @@ class RouterPathI #red-green{
 '-------------------------------------------------------------------------------
 RouterItemI -right-|> PathReceiver
 'RouterItemI --|> TimerListener
-RouterItemI *-- ClientPathI
+RouterItemI *-- "itemUpdate" ClientPathI
 RouterItemI *-- RouterClientAgent
 class RouterItemI{
     - int _clientId;
@@ -104,8 +104,8 @@ class RemoteCost {
     + int _cost;
 }
 RemoteItemI *-right- RemoteCost
-RemoteItemI *-- RemotePath
-RemoteItemI *-- RemoteP2pI
+RemoteItemI "updateCost,\nonP2pCostChanged,\n__addRouterItem,\n__updateCost" *-- RemotePath
+RemoteItemI "recvData" *-- RemoteP2pI 
 class RemoteItemI {
     + const int _remoteRouterId;
     + const int _remoteClientId;
@@ -116,7 +116,7 @@ class RemoteItemI {
     + sendData(){__getSendPath()/_remoteP2p.sendData()}
 }
 
-ClientPathI *-- RouterPathI
+ClientPathI "connect" *-- RouterPathI
 ClientPathI --|> ConnectionListener
 class ClientPathI {
     + RouterClientAgent _routerAgent; 
@@ -158,6 +158,7 @@ class RouterAgentI {
 }
 '-------------------------------------------------------------------------------
 DirectNodeI --|> PathReceiver
+'DirectNodeI --|> ConnectionListener
 DirectNodeI o-- RouterPathI
 class DirectNodeI {
     - RouterPathI _routerPath;
@@ -174,7 +175,7 @@ class ClientCost {
     + ClientPath _path;
     + _cost
 }
-RemoteClientI *-down- ClientPath
+RemoteClientI "__updateCost" *-down- ClientPath
 RemoteClientI *-left- ClientCost
 class RemoteClientI {
     - map<ClientPath> _clientPaths;
@@ -191,13 +192,15 @@ RouterNodeI --|> NetArcDriverI
 RouterNodeI -up-|> PortReceiver
 RouterNodeI -up-|> AdapterListener
 RouterNodeI -up-|> RouterNode
-RouterNodeI *-- RemoteClientI
-RouterNodeI *-- DirectClientI
+RouterNodeI "getRemoteClient" *-- RemoteClientI
+RouterNodeI "getDirectClient" *-- DirectClientI
 RouterNodeI *-- DirectNodeI
 RouterNodeI *-- DirectAgentI
 'RouterNodeI *-- ListenPort
 RouterNodeI o-right- NodeListener
 class RouterNodeI {
+    - DirectNodeI _localNode;
+    - bool _isRouterValid;
     - map<ListenPort> _listenPorts;
     - map<RemoteClientI> _remoteClients;
     - map<DirectClientI> _directClients;
@@ -238,15 +241,19 @@ interface ConnectionListener {
 }
 
 abstract class NetArcDriverI {
+    - map<NetArcListenI> _mapListens;
     + NetDriverPtr _driver;
     + onSendTo()=0;
     + onStartListen()=0;
+    + NetArcListenI getArcListen(local)
 }
 
 NetArcListenI -up-|>NetArcListenResult
-NetArcListenI o-- NetArcDriverI
+NetArcListenI --* NetArcDriverI
 class NetArcListenI {
+    - map<NetArcConnI> _mapConns;
     - NetArcDriverI _driver;
+    + NetArcConnI getArcConn(remote);
 }
 
 class Connection
@@ -268,7 +275,7 @@ class P2pClientI {
 }
 
 RemoteP2pI --|> PathReceiver
-RemoteP2pI *-- RouterPathI
+RemoteP2pI "onConnReady" *-- RouterPathI
 RemoteP2pI *-- P2pClient
 class RemoteP2pI {
     - RouterPathI _routerPath;
