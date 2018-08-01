@@ -12,6 +12,7 @@ do
     local Head_Data, Head_OobData, Head_Ping, Head_PingAck = 0, 1, 2, 3
     local PacketType= {[0]="Ctrl","Normal","FragFirst","FragSecond"}
     local Packet_Ctrl, Packet_Normal,Packet_FragFirst, Packet_FragSecond = 0, 1, 2, 3
+    local Extension_Ipv6 = 1
     local CtrlType  = {[0]="EchoRequest", "EchoReply", "HostUnreach","PortUnreach","ReportCost"}
     local Ctrl_EchoRequest, Ctrl_EchoReply, Ctrl_ReportHostUnreach, Ctrl_ReportPortUnreach, Ctrl_ReportCost = 0, 1, 2, 3, 4
     local AddrType  = {[0]='', "RouterId", "ClientId", "Router&ClientId", "RefClientId",
@@ -26,6 +27,7 @@ do
     local proto_addr= Proto(ADDR_NAME, "Application Router Addr")
     local proto_mpth= Proto(MPTH_NAME, "Multi Path")
 
+    proto_arc.fields.version        = ProtoField.uint8(ARC_NAME..".version","Version",base.DEC, nil, 0x88)
     proto_arc.fields.sendSeqno      = ProtoField.uint16(ARC_NAME..".sendSeqno","Sequence Number",base.DEC)
     proto_arc.fields.sendTimestamp  = ProtoField.uint16(ARC_NAME..".sendTimestamp","Send Timestamp",base.DEC)
     proto_arc.fields.reportTimestamp= ProtoField.uint16(ARC_NAME..".reportTimestamp","Report Timestamp",base.DEC)         
@@ -33,7 +35,9 @@ do
     proto_arc.fields.headType       = ProtoField.uint8 (ARC_NAME..".headType","Head Type",base.DEC, HeadType,0x7)
     proto_arc.fields.packetType     = ProtoField.uint8 (ARC_NAME..".packetType","Packet Type",base.DEC, PacketType,0x70)
     proto_arc.fields.did            = ProtoField.uint32(ARC_NAME..".did","Did",base.DEC)
-    proto_arc.fields.level          = ProtoField.uint8 (ARC_NAME..".level","Level",base.DEC)
+    proto_arc.fields.extension      = ProtoField.bool  (ARC_NAME..".extension","Extension",base.DOT,nil,0x80)
+    proto_arc.fields.hideIpv4       = ProtoField.bool  (ARC_NAME..".hideIpv4","HideIpv4",base.DOT,nil,0x40)
+    proto_arc.fields.level          = ProtoField.uint8 (ARC_NAME..".level","Level",base.DEC, nil, 0x3)
     proto_arc.fields.pathCount      = ProtoField.uint8 (ARC_NAME..".pathCount","Path Count",base.DEC, nil, 0x3)
     proto_arc.fields.fromAddrType   = ProtoField.uint8 (ARC_NAME..".fromAddrType","From Addr Type",base.DEC, AddrType, 0x1c)
     proto_arc.fields.toAddrType     = ProtoField.uint8 (ARC_NAME..".toAddrType","To Addr Type",base.DEC, AddrType, 0xe0)
@@ -67,6 +71,7 @@ do
         tree:add(proto_arc.fields.sendTimestamp, tvb(2,2))
         tree:add(proto_arc.fields.reportTimestamp, tvb(4,2))
         tree:add(proto_arc.fields.reportLoss, tvb(6,1))
+        tree:add(proto_arc.fields.version, tvb(7,1))
         tree:add(proto_arc.fields.headType, tvb(7,1))
         tree:add(proto_arc.fields.packetType, tvb(7,1))
         return tvb(HEAD_SIZE):tvb()
@@ -75,10 +80,12 @@ do
     local INFO_SIZE = 8
     local function decodeInfo(spec, tvb, root)
         root:add(proto_arc.fields.did, tvb(0, 4))
+        root:add(proto_arc.fields.extension, tvb(4, 1))
+        root:add(proto_arc.fields.hideIpv4, tvb(4, 1))
         root:add(proto_arc.fields.level, tvb(4, 1))
-        root:add(proto_arc.fields.pathCount, tvb(5, 1))
-        root:add(proto_arc.fields.fromAddrType, tvb(5, 1))
         root:add(proto_arc.fields.toAddrType, tvb(5, 1))
+        root:add(proto_arc.fields.fromAddrType, tvb(5, 1))
+        root:add(proto_arc.fields.pathCount, tvb(5, 1))
         root:add(proto_arc.fields.fromOverflow, tvb(6, 1))
         root:add(proto_arc.fields.toOverflow, tvb(7, 1))
         return tvb(INFO_SIZE):tvb()
@@ -154,13 +161,21 @@ do
         local tvb, fromAddrInfo, fromPort = decodeAddr("From Addr", spec.fromAddrType, tvb, root)
         local tvb, toAddrInfo, toPort = decodeAddr("To Addr", spec.toAddrType, tvb, root)
         if spec.fromClientIp then
-            if bit32.band(spec.level, 4) ~= 0 then
-                root:add(proto_arc.fields.fromClientIpv6, tvb(0,16))
-                tvb = tvb(16):tvb()
-            else
-                root:add(proto_arc.fields.fromClientIpv4, tvb(0,4))
-                tvb = tvb(4):tvb()
+            root:add(proto_arc.fields.fromClientIpv4, tvb(0,4))
+            tvb = tvb(4):tvb()
+        end
+        if spec.extension then
+            local XLen = tvb(0, 2):uint()
+            local i=0
+            while i<XLen do
+                local b = tvb(2+i, 1):uint()
+                local id, len = bit32.rshift(b, 4), bit32.band(b, 0xf)
+                if id == Extension_Ipv6 and len == 15 then
+                    root:add(proto_arc.fields.fromClientIpv6, tvb(2+i+1,16))
+                end
+                i = i + 2 + len
             end
+            tvb = tvb(2+XLen):tvb()
         end
         if string.len(fromAddrInfo) > 0 or string.len(toAddrInfo) > 0 then
             table.insert(info, fromAddrInfo .. '→' .. toAddrInfo)
@@ -208,19 +223,23 @@ do
         if spec.headType < Head_Ping then
             size = HEAD_SIZE + INFO_SIZE
             if len < size then return false end
-            spec.did, spec.level = tvb(HEAD_SIZE, 4):uint(), tvb(HEAD_SIZE+4, 1):uint()
+            spec.did, b = tvb(HEAD_SIZE, 4):uint(), tvb(HEAD_SIZE+4, 1):uint()
+            spec.extension = (bit32.band(b, 0x80) ~= 0)
+            spec.hideIpv4 = (bit32.band(b, 0x40) ~= 0)
+            spec.level=  bit32.band(b, 3)
+
             b = tvb(HEAD_SIZE+5, 1):uint()
             spec.fromAddrType = bit32.band(bit32.rshift(b, 2), 7)
             spec.toAddrType = bit32.band(bit32.rshift(b, 5), 7)
             spec.pathCount = bit32.band(b, 3) 
-            spec.fromClientIp = (bit32.band(spec.fromAddrType, Addr_ClientId) ~= 0)
+            spec.fromClientIp = (bit32.band(spec.fromAddrType, Addr_ClientId) ~= 0) and (not spec.hideIpv4)
             size = size + spec.pathCount*2 + ADDR_SIZE[bit32.band(spec.fromAddrType,7)] + ADDR_SIZE[bit32.band(spec.toAddrType,7)]
-            if spec.fromClientIp then
-                if bit32.band(spec.level, 4) ~= 0 then
-                    size = size + 16
-                else
-                    size = size + 4
-                end
+            if spec.fromClientIp then size = size + 4 end
+
+            if spec.extension then
+                if len < size+2 then return false end
+                local XLen = tvb(size, 2):uint()
+                size = size + 2 + XLen
             end
             if len < size then return false end
             if spec.packetType == Packet_Ctrl then
