@@ -177,7 +177,7 @@ local distor_jmcp = Dissector.get(JMCP_NAME)
 --jusmeeting protocal
 do
     local vals_types= {[0] = "Generic", "Audio", "Video", "Screen", "Data", "JMCP", "Detect"}
-    local vals_red={[0]="", [1]="Duplicate", [2]="Nack"}
+    local vals_red={[0]="", "Detect", "Nack", "Nack|Detect", 'RED', 'RED|Detect','RED|Nack','RED|Nack|Detect'}
     local proto_jmp = Proto(JMP_NAME, "JusMeeting Protocal")
     local field_index = ProtoField.uint16(JMP_NAME..".index","INDEX",base.HEX)
     local field_temporal = ProtoField.uint8(JMP_NAME..".temporal","TEMPORAL",base.DEC, nil, 0xf0)
@@ -189,8 +189,8 @@ do
     local field_spatial= ProtoField.uint8(JMP_NAME..".spatial","SPATIAL",base.DEC, nil,0xc)
     local field_timestamp = ProtoField.uint32(JMP_NAME..".timestamp","TIMESTAMP",base.HEX)
     local field_sequence = ProtoField.uint16(JMP_NAME..".sequence","SEQUENCE",base.HEX)
-    local field_compound = ProtoField.uint8(JMP_NAME..".compound","COMPOUND JMCP",base.DEC, vals_bool, 0x80)
-    local field_redundant = ProtoField.uint8(JMP_NAME..".redundant","REDUNDANT",base.DEC, vals_red, 0x60)
+    local field_compound = ProtoField.uint8(JMP_NAME..".compound","COMPOUND",base.DEC, vals_bool, 0x80)
+    local field_redundant = ProtoField.uint8(JMP_NAME..".redundant","REDUNDANT",base.DEC, vals_red, 0x70)
     local field_payloadlen = ProtoField.uint16(JMP_NAME..".length","LENGTH",base.DEC, nil,0x7fff)
 
     proto_jmp.fields = {
@@ -209,13 +209,13 @@ do
         local tree = root:add(proto_jmp, tvb(0, jmptype ~= 5 and JMP_SIZE or JMCP_SIZE))
         tree:add(field_index, tvb(0,2))
         tree:add(field_type, tvb(2,1))
-        if jmptype == 5 then
+        if jmptype == 5 then --JMCP
             distor_jmcp:call(tvb(3):tvb(), pinfo, root)
             return true 
-        elseif jmptype == 1 then
+        elseif jmptype == 1 then -- audio
             tree:add(field_audfec, tvb(3,1))
             tree:add(field_volume, tvb(3,1))
-        elseif jmptype == 2 or jmptype == 3 then
+        elseif jmptype == 2 or jmptype == 3 then --video or screen
             tree:add(field_temporal, tvb(2,1))
             tree:add(field_keyframe, tvb(3,1))
             tree:add(field_svc, tvb(3,1))
@@ -225,12 +225,16 @@ do
         tree:add(field_sequence, tvb(8,2))
         tree:add(field_compound, tvb(10,1))
         tree:add(field_redundant, tvb(10,1))
-        tree:add(field_payloadlen, tvb(10,2))
+        local isCompound = (bit32.band(tvb(10,1):uint(),0x80) ~= 0)
+        if isCompound then tree:add(field_payloadlen, tvb(10,2)) end
         distor_rtp:call(tvb(12):tvb(), pinfo, root)
 
         local info = pinfo.cols.info
-        local red = bit32.rshift(tvb(10,1):uint(), 5)
-        if red ~= 0  then
+        local red = 0
+        if (not isCompound) and (jmptype ~= 6) then -- not compound and not detect
+            red = bit32.band(bit32.rshift(tvb(10,1):uint(), 4),3)
+        end
+        if red  > 0 then
             info = string.format("%s:Seq=0x%X;",vals_red[red], tvb(8,2):uint())
         else
             info = string.format("%s,Seq=0x%X;",vals_types[jmptype], tvb(8,2):uint())..tostring(info)
