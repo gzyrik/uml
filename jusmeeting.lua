@@ -202,8 +202,9 @@ do
     
     local function JMP_dissector(tvb, pinfo, root)
         if tvb:len() < JMCP_SIZE then return false end
+        local index = tvb(0,2):uint();
         local jmptype = bit32.band(tvb(2,1):uint(),0xf)
-        if jmptype > 6 then return false end
+        if jmptype > 6 or index == 0xffff then return false end
         if jmptype ~= 5 and tvb:len() < JMP_SIZE then return false end
 
         local tree = root:add(proto_jmp, tvb(0, jmptype ~= 5 and JMP_SIZE or JMCP_SIZE))
