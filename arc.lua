@@ -1,6 +1,4 @@
 do
-    local distor_dat = Dissector.get("data")
-    local udp_encap_table = DissectorTable.get("udp.port")
 
     local ARC_NAME = "ARC"
     local ADDR_NAME= ARC_NAME ..".ADDR"
@@ -24,10 +22,8 @@ do
     local MPath_C1_EP_CP, MPath_C1_EP_C2, MPath_C1_CP, MPath_C1_C2 = 0, 1, 2, 3
 
     local proto_arc = Proto(ARC_NAME, "Application Router Control")
-    local proto_addr= Proto(ADDR_NAME, "Application Router Addr")
-    local proto_mpth= Proto(MPTH_NAME, "Multi Path")
 
-    proto_arc.fields.version        = ProtoField.uint8(ARC_NAME..".version","Version",base.DEC, nil, 0x88)
+    proto_arc.fields.version        = ProtoField.uint8 (ARC_NAME..".version","Version",base.DEC, nil, 0x88)
     proto_arc.fields.sendSeqno      = ProtoField.uint16(ARC_NAME..".sendSeqno","Sequence Number",base.DEC)
     proto_arc.fields.sendTimestamp  = ProtoField.uint16(ARC_NAME..".sendTimestamp","Send Timestamp",base.DEC)
     proto_arc.fields.reportTimestamp= ProtoField.uint16(ARC_NAME..".reportTimestamp","Report Timestamp",base.DEC)         
@@ -49,6 +45,7 @@ do
     proto_arc.fields.ctrlType       = ProtoField.uint8 (ARC_NAME..".ctrlType","Ctrl Type", base.DEC, CtrlType)
     proto_arc.fields.padding        = ProtoField.bytes (ARC_NAME..".padding","Padding")
 
+    local proto_addr= Proto(ADDR_NAME, "Application Router Addr")
     proto_addr.fields.routerId      = ProtoField.uint16(ADDR_NAME..".routerId","Router Id",base.DEC)
     proto_addr.fields.routerCost    = ProtoField.uint16(ADDR_NAME..".routerCost","Router Cost",base.DEC)
     proto_addr.fields.clientId      = ProtoField.uint32(ADDR_NAME..".clientId","Client Id",base.DEC)
@@ -57,6 +54,7 @@ do
     proto_addr.fields.refClientId   = ProtoField.uint16(ADDR_NAME..".refClientId","refClient Id",base.DEC)
     proto_addr.fields.port          = ProtoField.uint16(ADDR_NAME..".port","port",base.DEC)
 
+    local proto_mpth= Proto(MPTH_NAME, "Multi Path")
     proto_mpth.fields.type          = ProtoField.uint32(MPTH_NAME..".type","type",base.DEC, MPacketType, bit32.lshift(3, 30))
     proto_mpth.fields.path          = ProtoField.uint32(MPTH_NAME..".path","path",base.DEC, MPathType, bit32.lshift(3, 28))
     proto_mpth.fields.seqno         = ProtoField.uint32(MPTH_NAME..".seqno","seqno",base.DEC, nil, bit32.lshift(0x3FFF, 14))
@@ -294,6 +292,7 @@ do
     proto_arc.prefs.padding = Pref.uint("Padding", 1, "Padding before payload")
     proto_arc.prefs.payload = Pref.string("Payload Protocal", "rtp", "payload protocal name")
     proto_arc.prefs.mpath   = Pref.bool("Has Mpath", false, "have Mpath head")
+    local distor_dat = Dissector.get("data")
     function proto_arc.dissector(tvb, pinfo, root)
         tvb = arc_dissector(tvb, pinfo, root)
         local len = tvb:len()
@@ -316,5 +315,5 @@ do
             return distor_dat:call(tvb, pinfo, root)
         end
     end
-    udp_encap_table:add(8000, proto_arc)
+    DissectorTable.get("udp.port"):add(8000, proto_arc)
 end
