@@ -1,7 +1,9 @@
 do
 
     local ARC_NAME = "ARC"
-    local ADDR_NAME= ARC_NAME ..".ADDR"
+    local ARC2_NAME= "ARC2"
+    local CONN_NAME= ARC_NAME .. ".CONN"
+    local ADDR_NAME= ARC_NAME .. ".ADDR"
     local MPTH_NAME= "MPATH"
     local vals_bool ={[0]="False"}
     for i=1,0xFF do vals_bool[i] = "True" end
@@ -21,8 +23,11 @@ do
     local MPathType = {[0]="C1_EP_CP", "C1_EP_C2", "C1_CP", "C1_C2"}
     local MPath_C1_EP_CP, MPath_C1_EP_C2, MPath_C1_CP, MPath_C1_C2 = 0, 1, 2, 3
 
-    local proto_arc = Proto(ARC_NAME, "Application Router Control")
+    local DataType = {[0]="Request","Reply","CheckAlive","Frag","Release","KeyExchange","KeyTls",[14]="Null",[17]="Reply|Zip"}
+    local DataRequest, DataReply, DataCheckAlive, DataFrag, DataRelease, DataKeyExchange, DataKeyTls = 0,1,2,3,4,5,6
+    local DataNull,DataMaskType,DataMaskZip, DataMaskFrag = 14, 15, 16, 32
 
+    local proto_arc = Proto(ARC_NAME, "Application Router Control")
     proto_arc.fields.version        = ProtoField.uint8 (ARC_NAME..".version","Version",base.DEC, nil, 0x88)
     proto_arc.fields.sendSeqno      = ProtoField.uint16(ARC_NAME..".sendSeqno","Sequence Number",base.DEC)
     proto_arc.fields.sendTimestamp  = ProtoField.uint16(ARC_NAME..".sendTimestamp","Send Timestamp",base.DEC)
@@ -59,6 +64,17 @@ do
     proto_mpth.fields.path          = ProtoField.uint32(MPTH_NAME..".path","path",base.DEC, MPathType, bit32.lshift(3, 28))
     proto_mpth.fields.seqno         = ProtoField.uint32(MPTH_NAME..".seqno","seqno",base.DEC, nil, bit32.lshift(0x3FFF, 14))
     proto_mpth.fields.timestamp     = ProtoField.uint32(MPTH_NAME..".timestamp","timestamp",base.DEC, nil, 0x3FFF)
+
+    local proto_arc2 = Proto(ARC2_NAME, "Application Router Control over TCP")
+    proto_arc2.fields.packetLen      = ProtoField.uint32(ARC2_NAME..".packetLen","ARC Packet Len", base.DEC)
+
+    local proto_conn = Proto(CONN_NAME, "Application Router Control Connetion")
+    proto_conn.fields.randFactor     = ProtoField.uint32(CONN_NAME..".randFactor","Rand Factor", base.HEX)
+    proto_conn.fields.dataType       = ProtoField.uint8 (CONN_NAME..".dataType","Data Type", base.DEC, DataType)
+
+    local RTP_NAME= "RTP2"
+    local proto_rtp = Proto(RTP_NAME, "RTP over TCP")
+    proto_rtp.fields.packetLen      = ProtoField.uint16(RTP_NAME..".packetLen","RTP Packet Len", base.DEC)
 
     local HEAD_SIZE = 8
     local function decodeHead(spec, tvb, root)
@@ -279,6 +295,11 @@ do
         if X and len < off + 16 + CC*4 then return false end
         return true
     end
+    local function is_SecurityLegacy(tvb, len)
+        if len < 3 then return false end
+        local b2 = tvb(0,2):uint()
+        return b2 == 0xffff and tvb(2,1) ~= 0xff 
+    end
 
     local function is_jmp(proto, tvb,len, off)
         if proto ~= 'jmp' or len < 3 + off then return false end
@@ -292,7 +313,8 @@ do
     proto_arc.prefs.padding = Pref.uint("Padding", 1, "Padding before payload")
     proto_arc.prefs.payload = Pref.string("Payload Protocal", "rtp", "payload protocal name")
     proto_arc.prefs.mpath   = Pref.bool("Has Mpath", false, "have Mpath head")
-    local distor_dat = Dissector.get("data")
+    local distor_dat, distor_rtp = Dissector.get("data"), Dissector.get("rtp")
+    local _recvSecurityOk
     function proto_arc.dissector(tvb, pinfo, root)
         tvb = arc_dissector(tvb, pinfo, root)
         local len = tvb:len()
@@ -306,14 +328,62 @@ do
             payload = proto_arc.prefs.payload
             distor_payload = Dissector.get(payload)
         end
-        if distor_payload and (
+        if is_SecurityLegacy(tvb, len) then
+            local tree = root:add(proto_conn, tvb(2))
+            tree:add(proto_conn.fields.dataType, tvb(2, 1))
+            if not _recvSecurityOk and len > 3 then
+                _recvSecurityOk = true
+                tree:add(proto_conn.fields.randFactor, tvb(3, 4))
+            end
+        elseif distor_payload and (
             is_rtp(payload, tvb, len, padding)
-            or is_jmp(payload, tvb, len, padding)
-            ) then
+            or is_jmp(payload, tvb, len, padding)) then
             return distor_payload:call(tvb(padding):tvb(), pinfo, root)
         else
             return distor_dat:call(tvb, pinfo, root)
         end
     end
     DissectorTable.get("udp.port"):add(8000, proto_arc)
+   
+    function proto_arc2.init()
+        _recvSecurityOk = false
+    end
+    function proto_arc2.dissector(tvb, pinfo, root)
+        local bytes_consumed, bufsize = 0, tvb:len()
+        while bytes_consumed < bufsize do
+            local msglen = bufsize - bytes_consumed
+            if msglen ~= tvb:reported_length_remaining(bytes_consumed) then return 0 end
+            if msglen < 4 then return -DESEGMENT_ONE_MORE_SEGMENT end
+            local pktlen  = tvb(bytes_consumed, 4):uint()
+            if msglen < 4 + pktlen then
+                 pinfo.desegment_offset = bytes_consumed
+                 pinfo.desegment_len = pktlen + 4 - msglen;
+                 return bufsize
+            end
+            root:add(proto_arc2.fields.packetLen, tvb(bytes_consumed, 4))
+            proto_arc.dissector(tvb(bytes_consumed+4, pktlen):tvb(), pinfo, root)
+            bytes_consumed = bytes_consumed + 4 + pktlen  
+        end
+        return bytes_consumed
+    end
+    DissectorTable.get("tcp.port"):add(443, proto_arc2)
+    function proto_rtp.dissector(tvb, pinfo, root)
+        local bytes_consumed, bufsize = 0, tvb:len()
+        while bytes_consumed < bufsize do
+            local msglen = bufsize - bytes_consumed
+            if msglen ~= tvb:reported_length_remaining(bytes_consumed) then return 0 end
+            if msglen < 2 then return -DESEGMENT_ONE_MORE_SEGMENT end
+            local pktlen  = tvb(bytes_consumed, 2):uint()
+            if msglen < 2 + pktlen then
+                pinfo.desegment_offset = bytes_consumed
+                pinfo.desegment_len = pktlen + 2 - msglen;
+                return bufsize
+            end
+            root:add(proto_rtp.fields.packetLen, tvb(bytes_consumed, 2))
+            distor_rtp:call(tvb(bytes_consumed+2, pktlen):tvb(), pinfo, root)
+            bytes_consumed = bytes_consumed + 2 + pktlen  
+        end
+        return bytes_consumed
+    end
+    DissectorTable.get("tcp.port"):add(105, proto_rtp)
 end
